@@ -2,6 +2,7 @@
 #include "hardware/pwm.h"
 #include <stdio.h>
 #include <stdint.h>
+#include <math.h>
 
 const int MOTOR_PIN_P_1 = 21;
 const int MOTOR_PIN_P_2 = 22;
