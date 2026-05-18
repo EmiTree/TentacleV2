@@ -61,14 +61,31 @@ target_link_libraries(TentacleV2
 
 pico_add_extra_outputs(TentacleV2)
 
-add_executable(ManualMotorSpeed Main/ManualMotorSpeed.cpp)
+add_executable(MotorActuation Troubleshooting/MotorActuation.cpp)
 
-pico_enable_stdio_uart(ManualMotorSpeed 0)
-pico_enable_stdio_usb(ManualMotorSpeed 1)
+pico_set_program_name(MotorActuation "MotorActuation")
+pico_set_program_version(MotorActuation "0.1")
 
-target_link_libraries(ManualMotorSpeed
+pico_enable_stdio_uart(MotorActuation 0)
+pico_enable_stdio_usb(MotorActuation 1)
+
+target_link_libraries(MotorActuation
         pico_stdlib
         hardware_pwm
         )
 
-pico_add_extra_outputs(ManualMotorSpeed)
+pico_add_extra_outputs(MotorActuation)
+
+
+
+add_executable(OnlyAngle Troubleshooting/OnlyAngle.cpp)
+
+pico_enable_stdio_uart(OnlyAngle 0)
+pico_enable_stdio_usb(OnlyAngle 1)
+
+target_link_libraries(OnlyAngle
+        pico_stdlib
+        hardware_i2c
+        )
+
+pico_add_extra_outputs(OnlyAngle)
