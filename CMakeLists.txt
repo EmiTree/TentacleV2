@@ -78,7 +78,7 @@ pico_add_extra_outputs(MotorActuation)
 
 
 
-add_executable(OnlyAngle Troubleshooting/OnlyAngle.cpp)
+add_executable(OnlyAngle Troubleshooting/AngleMeasurement.cpp)
 
 pico_enable_stdio_uart(OnlyAngle 0)
 pico_enable_stdio_usb(OnlyAngle 1)
