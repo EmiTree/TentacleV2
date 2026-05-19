@@ -1,16 +1,19 @@
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
 #include "hardware/pwm.h"
-#include "PIDController.h"
-
 #include <stdio.h>
 #include <stdint.h>
 #include <math.h>
 #include <string.h>
 
-const float SETPOINT = 0.0f;
+//Variables
+const float KP = 5.0;
+const float KI = 0.01;
+const float KD = 0.5;
+const float SETPOINT = 0.0;
 
-PIDController pid(5.0f, 0.01f, 0.5f);
+float previousError = 0.0;
+float integral = 0.0;
 
 bool pidRunning = false;
 
@@ -25,9 +28,9 @@ const int MOTOR_PIN_P_2 = 22;
 const int MOTOR_PIN_Q_1 = 27;
 const int MOTOR_PIN_Q_2 = 26;
 
-const float MAX_PID_OUTPUT = 60.0f;
-const float MAX_PWM = 100.0f;
-const float MOTOR_START_PWM = 20.0f;
+const float MAX_PID_OUTPUT = 140.0;
+const float MAX_PWM = 80.0;
+const float MOTOR_START_PWM = 20.0;
 
 #define LED_GREEN 13
 #define LED_RED 12
@@ -45,8 +48,8 @@ const float MOTOR_START_PWM = 20.0f;
 #define REG_SMPLRT_DIV 0x19
 #define WHO_AM_I_REG 0x75
 
-#define ACCEL_SCALE_FACTOR_4G 8192.0f
-#define GYRO_SCALE_FACTOR_250DPS 131.0f
+#define ACCEL_SCALE_FACTOR_4G 8192.0
+#define GYRO_SCALE_FACTOR_250DPS 131.0
 
 #define ACCEL_SCALE_FACTOR ACCEL_SCALE_FACTOR_4G
 #define GYRO_SCALE_FACTOR GYRO_SCALE_FACTOR_250DPS
@@ -57,18 +60,17 @@ const float MOTOR_START_PWM = 20.0f;
 
 const float PI_VALUE = 3.14159265359f;
 
-float constrainValue(float value, float minVal, float maxVal);
+float constrain(float value, float minVal, float maxVal);
 void setupMotorPWM(int pin);
+float updatePid(float setpoint, float measuredValue, float dt, float &pValue, float &iValue, float &dValue);
 void convertPidToMotor(float pidOutput, float &pwmA, float &pwmB, float &motorOutput);
 float addMotorStartPower(float pwm);
 void driveMotors(float pwmA, float pwmB);
 void stopMotors();
 void resetPid();
-
 void mpu6050_reset();
 void mpu6050_configure();
 void mpu6050_read_raw(int16_t accel[3], int16_t gyro[3], int16_t *temp);
-
 void clearCommandBuffer();
 void processCommand();
 void handleSerialCommands();
@@ -96,10 +98,8 @@ int main() {
     printf("Successfully setup motors\n");
 
     i2c_init(I2C_PORT, 400 * 1000);
-
     gpio_set_function(4, GPIO_FUNC_I2C);
     gpio_set_function(5, GPIO_FUNC_I2C);
-
     gpio_pull_up(4);
     gpio_pull_up(5);
 
@@ -126,9 +126,7 @@ int main() {
         }
     }
 
-    int16_t accel[3];
-    int16_t gyro[3];
-    int16_t temp;
+    int16_t accel[3], gyro[3], temp;
 
     float roll = 0.0f;
     float pitch = 0.0f;
@@ -142,7 +140,6 @@ int main() {
 
     pwm_config_set_clkdiv(&config, 125.0f);
     pwm_config_set_wrap(&config, MAXIMUM_LEVEL);
-
     pwm_init(slice_num, &config, true);
 
     clearCommandBuffer();
@@ -183,13 +180,17 @@ int main() {
         float roll_out = roll + 2.3f;
         float pitch_out = pitch + 4.4f;
 
+        float pValue = 0.0f;
+        float iValue = 0.0f;
+        float dValue = 0.0f;
+
         float pidOutput = 0.0f;
         float pwmA = 0.0f;
         float pwmB = 0.0f;
         float motorOutput = 0.0f;
 
         if (pidRunning) {
-            pidOutput = pid.update(SETPOINT, roll_out, dt);
+            pidOutput = updatePid(SETPOINT, roll_out, dt, pValue, iValue, dValue);
 
             convertPidToMotor(pidOutput, pwmA, pwmB, motorOutput);
 
@@ -204,12 +205,11 @@ int main() {
         if (time_since_status > 500000) {
             lastStatusPrint = now;
 
-            printf("\nstate = %s | roll = %.2f | pitch = %.2f | pid = %.2f | motor = %.2f | pwmA = %.2f | pwmB = %.2f\n",
+            printf("\nstate = %s | roll = %.2f | pitch = %.2f | pid = %.2f | pwmA = %.2f | pwmB = %.2f\n",
                    pidRunning ? "running" : "stopped",
                    roll_out,
                    pitch_out,
                    pidOutput,
-                   motorOutput,
                    pwmA,
                    pwmB);
 
@@ -223,7 +223,7 @@ int main() {
     return 0;
 }
 
-float constrainValue(float value, float minVal, float maxVal) {
+float constrain(float value, float minVal, float maxVal) {
     if (value < minVal) return minVal;
     if (value > maxVal) return maxVal;
     return value;
@@ -242,9 +242,29 @@ void setupMotorPWM(int pin) {
     pwm_set_gpio_level(pin, 0);
 }
 
+float updatePid(float setpoint, float measuredValue, float dt, float &pValue, float &iValue, float &dValue) {
+    float error = setpoint - measuredValue;
+
+    integral += error * dt;
+
+    float derivative = 0.0f;
+
+    if (dt > 0.0f) {
+        derivative = (error - previousError) / dt;
+    }
+
+    pValue = KP * error;
+    iValue = KI * integral;
+    dValue = KD * derivative;
+
+    previousError = error;
+
+    return pValue + iValue + dValue;
+}
+
 void convertPidToMotor(float pidOutput, float &pwmA, float &pwmB, float &motorOutput) {
     motorOutput = pidOutput / MAX_PID_OUTPUT * MAX_PWM;
-    motorOutput = constrainValue(motorOutput, -MAX_PWM, MAX_PWM);
+    motorOutput = constrain(motorOutput, -MAX_PWM, MAX_PWM);
 
     if (motorOutput > 0.0f) {
         pwmA = motorOutput;
@@ -265,7 +285,7 @@ float addMotorStartPower(float pwm) {
 
     float adjustedPwm = MOTOR_START_PWM + pwm;
 
-    return constrainValue(adjustedPwm, 0.0f, MAX_PWM);
+    return constrain(adjustedPwm, 0.0f, MAX_PWM);
 }
 
 void driveMotors(float pwmA, float pwmB) {
@@ -275,8 +295,8 @@ void driveMotors(float pwmA, float pwmB) {
     uint16_t pwmAValue = (uint16_t)((adjustedPwmA / 100.0f) * MAXIMUM_LEVEL);
     uint16_t pwmBValue = (uint16_t)((adjustedPwmB / 100.0f) * MAXIMUM_LEVEL);
 
-    pwmAValue = (uint16_t)constrainValue(pwmAValue, 0, MAXIMUM_LEVEL);
-    pwmBValue = (uint16_t)constrainValue(pwmBValue, 0, MAXIMUM_LEVEL);
+    pwmAValue = (uint16_t)constrain(pwmAValue, 0, MAXIMUM_LEVEL);
+    pwmBValue = (uint16_t)constrain(pwmBValue, 0, MAXIMUM_LEVEL);
 
     if (adjustedPwmA > 0.0f) {
         pwm_set_gpio_level(MOTOR_PIN_P_1, pwmAValue);
@@ -303,7 +323,8 @@ void stopMotors() {
 }
 
 void resetPid() {
-    pid.reset();
+    previousError = 0.0f;
+    integral = 0.0f;
 }
 
 void clearCommandBuffer() {
