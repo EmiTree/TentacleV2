@@ -119,6 +119,7 @@ int main() {
     absolute_time_t last_time = get_absolute_time();
 
     while (true) {
+        printf("we're in the loop\n");
         mpu6050_read_raw(accel, gyro);
 
         float ax = accel[0] / ACCEL_SCALE_FACTOR;

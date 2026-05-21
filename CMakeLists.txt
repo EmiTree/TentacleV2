@@ -38,6 +38,7 @@ pico_sdk_init()
 add_executable(TentacleV2
         Main/TentacleV2.cpp
         Modules/PIDController.cpp
+        Modules/ServoActuator.cpp
         )
 
 pico_set_program_name(TentacleV2 "TentacleV2")
@@ -107,3 +108,28 @@ target_link_libraries(OnlyAngle
         )
 
 pico_add_extra_outputs(OnlyAngle)
+
+add_executable(MotorMpuDebug Troubleshooting/MotorMpuDebug.cpp)
+
+pico_enable_stdio_uart(MotorMpuDebug 0)
+pico_enable_stdio_usb(MotorMpuDebug 1)
+
+target_link_libraries(MotorMpuDebug
+        pico_stdlib
+        hardware_pwm
+        hardware_i2c
+        )
+
+pico_add_extra_outputs(MotorMpuDebug)
+
+add_executable(I2CScanner Troubleshooting/I2CScanner.cpp)
+
+pico_enable_stdio_uart(I2CScanner 0)
+pico_enable_stdio_usb(I2CScanner 1)
+
+target_link_libraries(I2CScanner
+        pico_stdlib
+        hardware_i2c
+        )
+
+pico_add_extra_outputs(I2CScanner)

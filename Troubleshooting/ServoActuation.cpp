@@ -5,8 +5,48 @@
 #include <stdlib.h>
 #include <string.h>
 
+/*
+    Standalone 4-servo actuation troubleshooting code.
+
+    This file is for testing the servos without:
+        - PID
+        - motors
+        - MPU6050
+        - the main TentacleV2 control code
+
+    Wiring:
+        Servo 1 signal wire -> GP14
+        Servo 2 signal wire -> GP15
+        Servo 3 signal wire -> GP16
+        Servo 4 signal wire -> GP17
+
+    Servo power:
+        Servo V+ wires  -> external 5V servo power supply
+        Servo GND wires -> external power supply GND
+        Pico GND        -> same external power supply GND
+
+    Important:
+        Do not power four servos from the Pico 3V3 pin.
+
+    Failsafe:
+        Each servo has its own estimated angle.
+        Each servo stops by itself at -360 or +360 degrees.
+
+    Super failsafe:
+        Type FORCE to immediately stop all servos.
+*/
+
 const int SERVO_1_PIN = 14;
 const int SERVO_2_PIN = 15;
+const int SERVO_3_PIN = 16;
+const int SERVO_4_PIN = 17;
+
+const int SERVO_PINS[4] = {
+    SERVO_1_PIN,
+    SERVO_2_PIN,
+    SERVO_3_PIN,
+    SERVO_4_PIN
+};
 
 const int PWM_WRAP = 20000 - 1;
 
@@ -20,25 +60,39 @@ const float MAX_SPEED = 100.0f;
 const float MIN_REAL_ANGLE_DEGREES = -360.0f;
 const float MAX_REAL_ANGLE_DEGREES = 360.0f;
 
+/*
+    Your angle command calibration:
+        internal angle 22 -> real movement 90 degrees
+*/
 const float INTERNAL_DEGREES_FOR_90_REAL_DEGREES = 22.0f;
 
 const float ANGLE_MOVE_SPEED = 25.0f;
 const float MS_PER_DEGREE_AT_100_SPEED = 11.0f;
 
+/*
+    Your speed failsafe correction:
+        the speed-mode estimate needed to count 3 times faster.
+*/
 const float SPEED_FAILSAFE_ANGLE_MULTIPLIER = 3.0f;
 
-float servo1Speed = 0.0f;
-float servo2Speed = 0.0f;
+float servoSpeeds[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 
-float estimatedRealAngle = 0.0f;
+/*
+    Separate estimated angle for each servo.
+*/
+float estimatedAngles[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+
+bool timedMoveRunning = false;
+float timedMoveTargetAngle = 0.0f;
+absolute_time_t timedMoveEndTime;
+
+absolute_time_t lastAngleUpdateTime;
 
 char inputBuffer[40];
 int inputIndex = 0;
 
 bool hasPendingInput = false;
 absolute_time_t lastInputTime;
-
-absolute_time_t lastAngleUpdateTime;
 
 float clampFloat(float value, float low, float high) {
     if (value < low) return low;
@@ -64,7 +118,7 @@ void setupServoPwm(int pin) {
     pwm_init(slice, &config, true);
     pwm_set_gpio_level(pin, SERVO_STOP_US);
 
-    printf("Setup continuous servo PWM on GP%d\n", pin);
+    printf("Setup servo PWM on GP%d\n", pin);
 }
 
 int speedToPulseUs(float speedPercent) {
@@ -75,226 +129,254 @@ int speedToPulseUs(float speedPercent) {
     return clampInt(pulseUs, SERVO_MIN_US, SERVO_MAX_US);
 }
 
-void setServoSpeed(int pin, float speedPercent) {
-    int pulseUs = speedToPulseUs(speedPercent);
-    pwm_set_gpio_level(pin, pulseUs);
+void setServoSpeedPin(int servoIndex, float speedPercent) {
+    pwm_set_gpio_level(SERVO_PINS[servoIndex], speedToPulseUs(speedPercent));
 }
 
-void setRawServoSpeeds(float speed1, float speed2) {
-    servo1Speed = clampFloat(speed1, MIN_SPEED, MAX_SPEED);
-    servo2Speed = clampFloat(speed2, MIN_SPEED, MAX_SPEED);
+void setOneServoSpeedByIndex(int servoIndex, float speedPercent) {
+    speedPercent = clampFloat(speedPercent, MIN_SPEED, MAX_SPEED);
 
-    setServoSpeed(SERVO_1_PIN, servo1Speed);
-    setServoSpeed(SERVO_2_PIN, servo2Speed);
+    if (estimatedAngles[servoIndex] >= MAX_REAL_ANGLE_DEGREES && speedPercent > 0.0f) {
+        speedPercent = 0.0f;
+        printf("\nServo %d blocked: maximum estimated angle reached\n", servoIndex + 1);
+    }
+
+    if (estimatedAngles[servoIndex] <= MIN_REAL_ANGLE_DEGREES && speedPercent < 0.0f) {
+        speedPercent = 0.0f;
+        printf("\nServo %d blocked: minimum estimated angle reached\n", servoIndex + 1);
+    }
+
+    servoSpeeds[servoIndex] = speedPercent;
+    setServoSpeedPin(servoIndex, speedPercent);
 
     lastAngleUpdateTime = get_absolute_time();
 }
 
+void setAllServoSpeeds(float speedPercent) {
+    for (int i = 0; i < 4; i++) {
+        setOneServoSpeedByIndex(i, speedPercent);
+    }
+}
+
 void stopServosQuietly() {
-    setRawServoSpeeds(0.0f, 0.0f);
+    setAllServoSpeeds(0.0f);
 }
 
 void printServoStatus() {
-    printf("\n--- Continuous servo status ---\n");
-    printf("Servo 1 | GP%d | speed %.1f%% | pulse %d us\n",
-           SERVO_1_PIN,
-           servo1Speed,
-           speedToPulseUs(servo1Speed));
-    printf("Servo 2 | GP%d | speed %.1f%% | pulse %d us\n",
-           SERVO_2_PIN,
-           servo2Speed,
-           speedToPulseUs(servo2Speed));
-    printf("Estimated real angle: %.1f degrees\n", estimatedRealAngle);
-    printf("Allowed range: %.1f to %.1f degrees\n",
+    printf("\n--- Servo status ---\n");
+
+    for (int i = 0; i < 4; i++) {
+        printf("Servo %d | GP%d | speed %.1f%% | pulse %d us | estimated angle %.1f\n",
+               i + 1,
+               SERVO_PINS[i],
+               servoSpeeds[i],
+               speedToPulseUs(servoSpeeds[i]),
+               estimatedAngles[i]);
+    }
+
+    printf("Allowed range per servo: %.1f to %.1f degrees\n",
            MIN_REAL_ANGLE_DEGREES,
            MAX_REAL_ANGLE_DEGREES);
-    printf("--------------------------------\n");
+    printf("--------------------\n");
 }
 
-void updateEstimatedAngleAndFailsafe() {
+void forceStopServos() {
+    /*
+        Super failsafe.
+
+        This immediately cancels any timed angle move and sends stop pulses to
+        every servo. It does not care about estimated angles or normal command
+        logic.
+    */
+    timedMoveRunning = false;
+
+    for (int i = 0; i < 4; i++) {
+        servoSpeeds[i] = 0.0f;
+        setServoSpeedPin(i, 0.0f);
+    }
+
+    printf("\nFORCE STOP: all servos stopped immediately\n");
+    printServoStatus();
+}
+
+void updateEstimatedAnglesAndFailsafes() {
     absolute_time_t now = get_absolute_time();
     float elapsedMs = absolute_time_diff_us(lastAngleUpdateTime, now) / 1000.0f;
     lastAngleUpdateTime = now;
 
-    float averageSpeed = (servo1Speed + servo2Speed) / 2.0f;
+    for (int i = 0; i < 4; i++) {
+        if (servoSpeeds[i] > -0.01f && servoSpeeds[i] < 0.01f) {
+            continue;
+        }
 
-    if (averageSpeed > -0.01f && averageSpeed < 0.01f) {
-        return;
+        float internalDegreesMoved = elapsedMs / MS_PER_DEGREE_AT_100_SPEED * (servoSpeeds[i] / 100.0f);
+        float realDegreesMoved = internalDegreesMoved * (90.0f / INTERNAL_DEGREES_FOR_90_REAL_DEGREES) * SPEED_FAILSAFE_ANGLE_MULTIPLIER;
+
+        estimatedAngles[i] += realDegreesMoved;
+
+        if (estimatedAngles[i] >= MAX_REAL_ANGLE_DEGREES) {
+            estimatedAngles[i] = MAX_REAL_ANGLE_DEGREES;
+            servoSpeeds[i] = 0.0f;
+            setServoSpeedPin(i, 0.0f);
+
+            printf("\nSERVO %d FAILSAFE: maximum estimated angle reached. Servo stopped.\n", i + 1);
+            printServoStatus();
+            printf("\nEnter command: ");
+            fflush(stdout);
+        } else if (estimatedAngles[i] <= MIN_REAL_ANGLE_DEGREES) {
+            estimatedAngles[i] = MIN_REAL_ANGLE_DEGREES;
+            servoSpeeds[i] = 0.0f;
+            setServoSpeedPin(i, 0.0f);
+
+            printf("\nSERVO %d FAILSAFE: minimum estimated angle reached. Servo stopped.\n", i + 1);
+            printServoStatus();
+            printf("\nEnter command: ");
+            fflush(stdout);
+        }
+    }
+}
+
+void startTimedMove(float targetAngle, float angleDifference) {
+    float moveSpeed = ANGLE_MOVE_SPEED;
+    float absoluteDifference = angleDifference;
+
+    if (absoluteDifference < 0.0f) {
+        moveSpeed = -ANGLE_MOVE_SPEED;
+        absoluteDifference = -absoluteDifference;
     }
 
-    float internalDegreesMoved = elapsedMs / MS_PER_DEGREE_AT_100_SPEED * (averageSpeed / 100.0f);
-    float realDegreesMoved = internalDegreesMoved * (90.0f / INTERNAL_DEGREES_FOR_90_REAL_DEGREES) * SPEED_FAILSAFE_ANGLE_MULTIPLIER;
+    /*
+        This is the working angle calibration.
+        It is not multiplied by SPEED_FAILSAFE_ANGLE_MULTIPLIER.
+    */
+    float internalAngleDifference = absoluteDifference * (INTERNAL_DEGREES_FOR_90_REAL_DEGREES / 90.0f);
+    float durationMs = internalAngleDifference * MS_PER_DEGREE_AT_100_SPEED * (100.0f / ANGLE_MOVE_SPEED);
 
-    estimatedRealAngle += realDegreesMoved;
+    timedMoveRunning = true;
+    timedMoveTargetAngle = targetAngle;
+    timedMoveEndTime = make_timeout_time_ms((uint32_t)durationMs);
 
-    if (estimatedRealAngle >= MAX_REAL_ANGLE_DEGREES) {
-        estimatedRealAngle = MAX_REAL_ANGLE_DEGREES;
+    setAllServoSpeeds(moveSpeed);
+
+    printf("\nServos moving to %.1f estimated real degrees\n", targetAngle);
+    printf("Servos rotating at %.1f%% for %.0f ms\n", moveSpeed, durationMs);
+}
+
+void updateTimedMove() {
+    if (timedMoveRunning && absolute_time_diff_us(get_absolute_time(), timedMoveEndTime) <= 0) {
         stopServosQuietly();
 
-        printf("\nFAILSAFE: reached maximum estimated angle %.1f degrees. Servos stopped.\n",
-               MAX_REAL_ANGLE_DEGREES);
+        for (int i = 0; i < 4; i++) {
+            estimatedAngles[i] = timedMoveTargetAngle;
+        }
+
+        timedMoveRunning = false;
+
+        printf("\nServo timed angle move complete\n");
         printServoStatus();
         printf("\nEnter command: ");
         fflush(stdout);
-    } else if (estimatedRealAngle <= MIN_REAL_ANGLE_DEGREES) {
-        estimatedRealAngle = MIN_REAL_ANGLE_DEGREES;
-        stopServosQuietly();
-
-        printf("\nFAILSAFE: reached minimum estimated angle %.1f degrees. Servos stopped.\n",
-               MIN_REAL_ANGLE_DEGREES);
-        printServoStatus();
-        printf("\nEnter command: ");
-        fflush(stdout);
     }
 }
 
-void setServo1(float speedPercent) {
-    updateEstimatedAngleAndFailsafe();
+void setAllServosSpeed(float speedPercent) {
+    updateEstimatedAnglesAndFailsafes();
 
-    setRawServoSpeeds(speedPercent, servo2Speed);
+    timedMoveRunning = false;
+    setAllServoSpeeds(speedPercent);
 
-    printf("\nServo 1 speed set to %.1f%%\n", servo1Speed);
+    printf("\nAll servo speeds requested: %.1f%%\n", speedPercent);
     printServoStatus();
 }
 
-void setServo2(float speedPercent) {
-    updateEstimatedAngleAndFailsafe();
+void setOneServoSpeed(int servoNumber, float speedPercent) {
+    updateEstimatedAnglesAndFailsafes();
 
-    setRawServoSpeeds(servo1Speed, speedPercent);
+    timedMoveRunning = false;
 
-    printf("\nServo 2 speed set to %.1f%%\n", servo2Speed);
-    printServoStatus();
-}
-
-void setBothServos(float speedPercent) {
-    updateEstimatedAngleAndFailsafe();
-
-    if (estimatedRealAngle >= MAX_REAL_ANGLE_DEGREES && speedPercent > 0.0f) {
-        printf("\nBlocked: already at maximum estimated angle.\n");
-        stopServosQuietly();
-        printServoStatus();
+    if (servoNumber < 1 || servoNumber > 4) {
+        printf("\nUnknown servo number\n");
         return;
     }
 
-    if (estimatedRealAngle <= MIN_REAL_ANGLE_DEGREES && speedPercent < 0.0f) {
-        printf("\nBlocked: already at minimum estimated angle.\n");
-        stopServosQuietly();
-        printServoStatus();
-        return;
-    }
+    setOneServoSpeedByIndex(servoNumber - 1, speedPercent);
 
-    setRawServoSpeeds(speedPercent, speedPercent);
-
-    printf("\nBoth servo speeds set to %.1f%%\n", servo1Speed);
+    printf("\nServo %d speed requested: %.1f%%\n", servoNumber, speedPercent);
     printServoStatus();
 }
 
 void stopServos() {
-    updateEstimatedAngleAndFailsafe();
+    updateEstimatedAnglesAndFailsafes();
 
+    timedMoveRunning = false;
     stopServosQuietly();
 
-    printf("\nBoth servos stopped\n");
+    printf("\nServos stopped\n");
     printServoStatus();
 }
 
 void moveToAngle(float targetRealAngle) {
-    updateEstimatedAngleAndFailsafe();
+    updateEstimatedAnglesAndFailsafes();
 
     targetRealAngle = clampFloat(targetRealAngle, MIN_REAL_ANGLE_DEGREES, MAX_REAL_ANGLE_DEGREES);
 
-    float realAngleDifference = targetRealAngle - estimatedRealAngle;
+    /*
+        Use servo 1 as the reference for all-servo angle moves.
+        Since all servos move together here, they are set to the same target
+        when the timed move finishes.
+    */
+    float angleDifference = targetRealAngle - estimatedAngles[0];
 
-    if (realAngleDifference > -0.5f && realAngleDifference < 0.5f) {
+    if (angleDifference > -0.5f && angleDifference < 0.5f) {
         printf("\nAlready close to %.1f real degrees\n", targetRealAngle);
         return;
     }
 
-    float moveSpeed = ANGLE_MOVE_SPEED;
-
-    if (realAngleDifference < 0.0f) {
-        moveSpeed = -ANGLE_MOVE_SPEED;
-        realAngleDifference = -realAngleDifference;
-    }
-
-    float internalAngleDifference = realAngleDifference * (INTERNAL_DEGREES_FOR_90_REAL_DEGREES / 90.0f);
-    float durationMs = internalAngleDifference * MS_PER_DEGREE_AT_100_SPEED * (100.0f / ANGLE_MOVE_SPEED);
-
-    printf("\nMoving to estimated absolute angle %.1f real degrees\n", targetRealAngle);
-    printf("Rotating at %.1f%% speed for %.0f ms\n", moveSpeed, durationMs);
-
-    setRawServoSpeeds(moveSpeed, moveSpeed);
-    sleep_ms((uint32_t)durationMs);
-
-    stopServosQuietly();
-
-    estimatedRealAngle = targetRealAngle;
-
-    printServoStatus();
+    startTimedMove(targetRealAngle, angleDifference);
 }
 
 void moveByAngle(float realAngleDifference) {
-    updateEstimatedAngleAndFailsafe();
+    updateEstimatedAnglesAndFailsafes();
 
-    realAngleDifference = clampFloat(realAngleDifference,
-                                     MIN_REAL_ANGLE_DEGREES,
-                                     MAX_REAL_ANGLE_DEGREES);
+    float targetRealAngle = estimatedAngles[0] + realAngleDifference;
+    targetRealAngle = clampFloat(targetRealAngle, MIN_REAL_ANGLE_DEGREES, MAX_REAL_ANGLE_DEGREES);
 
-    if (realAngleDifference > -0.5f && realAngleDifference < 0.5f) {
-        printf("\nMove is too small\n");
+    float correctedDifference = targetRealAngle - estimatedAngles[0];
+
+    if (correctedDifference > -0.5f && correctedDifference < 0.5f) {
+        printf("\nMove is too small or blocked by angle limit\n");
         return;
     }
 
-    float originalDifference = realAngleDifference;
-    float moveSpeed = ANGLE_MOVE_SPEED;
-
-    if (realAngleDifference < 0.0f) {
-        moveSpeed = -ANGLE_MOVE_SPEED;
-        realAngleDifference = -realAngleDifference;
-    }
-
-    float internalAngleDifference = realAngleDifference * (INTERNAL_DEGREES_FOR_90_REAL_DEGREES / 90.0f);
-    float durationMs = internalAngleDifference * MS_PER_DEGREE_AT_100_SPEED * (100.0f / ANGLE_MOVE_SPEED);
-
-    printf("\nMoving by %.1f real degrees\n", originalDifference);
-    printf("Rotating at %.1f%% speed for %.0f ms\n", moveSpeed, durationMs);
-
-    setRawServoSpeeds(moveSpeed, moveSpeed);
-    sleep_ms((uint32_t)durationMs);
-
-    stopServosQuietly();
-
-    estimatedRealAngle += originalDifference;
-    estimatedRealAngle = clampFloat(estimatedRealAngle,
-                                    MIN_REAL_ANGLE_DEGREES,
-                                    MAX_REAL_ANGLE_DEGREES);
-
-    printServoStatus();
+    startTimedMove(targetRealAngle, correctedDifference);
 }
 
 void zeroAngleHere() {
     stopServosQuietly();
 
-    estimatedRealAngle = 0.0f;
+    for (int i = 0; i < 4; i++) {
+        estimatedAngles[i] = 0.0f;
+    }
 
-    printf("\nCurrent position saved as 0 real degrees\n");
+    printf("\nAll current servo positions saved as 0 degrees\n");
     printServoStatus();
 }
 
 void printHelp() {
     printf("\nCommands:\n");
-    printf("angle 90  -> go to estimated absolute +90 degrees\n");
-    printf("move 90   -> move +90 degrees from current position\n");
-    printf("move -20  -> move -20 degrees from current position\n");
-    printf("zero      -> save current position as 0 degrees\n");
-    printf("0         -> stop both servos\n");
-    printf("+20       -> rotate at 20%% speed until stopped or failsafe reached\n");
-    printf("-20       -> rotate other direction at 20%% speed until stopped or failsafe reached\n");
+    printf("FORCE     -> SUPER FAILSAFE: immediately stop all servos\n");
+    printf("angle 90  -> all servos go to estimated absolute +90 degrees\n");
+    printf("move 90   -> all servos move +90 degrees from current position\n");
+    printf("move -20  -> all servos move -20 degrees from current position\n");
+    printf("zero      -> save all current servo positions as 0 degrees\n");
+    printf("+20       -> rotate all servos at 20%% speed\n");
+    printf("-20       -> rotate all servos the other direction\n");
     printf("s1 +25    -> set only servo 1 speed\n");
     printf("s2 -20    -> set only servo 2 speed\n");
-    printf("both 10   -> set both servo speeds\n");
-    printf("stop      -> stop both servos\n");
-    printf("status    -> print current values\n");
+    printf("s3 +25    -> set only servo 3 speed\n");
+    printf("s4 -20    -> set only servo 4 speed\n");
+    printf("stop      -> stop all servos\n");
+    printf("status    -> print servo status\n");
     printf("help      -> print this help text\n\n");
 }
 
@@ -308,7 +390,7 @@ void clearInputBuffer() {
 }
 
 void processInput() {
-    updateEstimatedAngleAndFailsafe();
+    updateEstimatedAnglesAndFailsafes();
 
     inputBuffer[inputIndex] = '\0';
 
@@ -319,32 +401,43 @@ void processInput() {
 
     printf("\nReceived command: %s\n", inputBuffer);
 
+    if (strcmp(inputBuffer, "FORCE") == 0) {
+        forceStopServos();
+        clearInputBuffer();
+
+        printf("\nEnter command: ");
+        fflush(stdout);
+        return;
+    }
+
     char command[12];
     float value = 0.0f;
 
     int parts = sscanf(inputBuffer, "%11s %f", command, &value);
 
     if (parts >= 1) {
-        if (strcmp(command, "move") == 0 && parts == 2) {
-            moveByAngle(value);
-        } else if (strcmp(command, "angle") == 0 && parts == 2) {
+        if (strcmp(command, "angle") == 0 && parts == 2) {
             moveToAngle(value);
+        } else if (strcmp(command, "move") == 0 && parts == 2) {
+            moveByAngle(value);
         } else if (strcmp(command, "zero") == 0) {
             zeroAngleHere();
-        } else if (command[0] == '+' || command[0] == '-' || (command[0] >= '0' && command[0] <= '9')) {
-            setBothServos((float)atof(command));
-        } else if (strcmp(command, "s1") == 0 && parts == 2) {
-            setServo1(value);
-        } else if (strcmp(command, "s2") == 0 && parts == 2) {
-            setServo2(value);
-        } else if (strcmp(command, "both") == 0 && parts == 2) {
-            setBothServos(value);
-        } else if (strcmp(command, "stop") == 0) {
+        } else if (strcmp(command, "stop") == 0 || strcmp(command, "0") == 0) {
             stopServos();
         } else if (strcmp(command, "status") == 0) {
             printServoStatus();
         } else if (strcmp(command, "help") == 0) {
             printHelp();
+        } else if (strcmp(command, "s1") == 0 && parts == 2) {
+            setOneServoSpeed(1, value);
+        } else if (strcmp(command, "s2") == 0 && parts == 2) {
+            setOneServoSpeed(2, value);
+        } else if (strcmp(command, "s3") == 0 && parts == 2) {
+            setOneServoSpeed(3, value);
+        } else if (strcmp(command, "s4") == 0 && parts == 2) {
+            setOneServoSpeed(4, value);
+        } else if (command[0] == '+' || command[0] == '-' || (command[0] >= '0' && command[0] <= '9')) {
+            setAllServosSpeed((float)atof(command));
         } else {
             printf("\nUnknown command: %s\n", inputBuffer);
             printHelp();
@@ -414,22 +507,25 @@ int main() {
         sleep_ms(100);
     }
 
-    setupServoPwm(SERVO_1_PIN);
-    setupServoPwm(SERVO_2_PIN);
+    for (int i = 0; i < 4; i++) {
+        setupServoPwm(SERVO_PINS[i]);
+    }
 
     stopServosQuietly();
     clearInputBuffer();
 
+    timedMoveEndTime = get_absolute_time();
     lastAngleUpdateTime = get_absolute_time();
 
-    printf("\nContinuous servo command test ready\n");
+    printf("\n4-servo actuation test ready\n");
     printHelp();
     printf("Enter command: ");
     fflush(stdout);
 
     while (true) {
         handleSerialInput();
-        updateEstimatedAngleAndFailsafe();
+        updateEstimatedAnglesAndFailsafes();
+        updateTimedMove();
         sleep_ms(10);
     }
 }
