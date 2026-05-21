@@ -80,6 +80,20 @@ target_link_libraries(MotorActuation
 
 pico_add_extra_outputs(MotorActuation)
 
+add_executable(ServoActuation Troubleshooting/ServoActuation.cpp)
+
+pico_set_program_name(ServoActuation "ServoActuation")
+pico_set_program_version(ServoActuation "0.1")
+
+pico_enable_stdio_uart(ServoActuation 0)
+pico_enable_stdio_usb(ServoActuation 1)
+
+target_link_libraries(ServoActuation
+        pico_stdlib
+        hardware_pwm
+        )
+
+pico_add_extra_outputs(ServoActuation)
 
 
 add_executable(OnlyAngle Troubleshooting/AngleMeasurement.cpp)

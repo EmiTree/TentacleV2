@@ -9,7 +9,7 @@
 #include <string.h>           // Gives string functions like strcmp.
 
 float setpoint = 0.0f; //The target angle for the tentacle.
-PIDController pid(10f, 0.0f, 0.01f); //Create the PID controller from function "PIDController" in Modules, These starting values are: pid(Kp, Ki, Kd)
+PIDController pid(10.0f, 0.0f, 0.01f); //Create the PID controller from function "PIDController" in Modules, These starting values are: pid(Kp, Ki, Kd)
 
 /*
     This decides whether the PID controller is actively driving the motors.
