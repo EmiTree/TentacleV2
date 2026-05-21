@@ -8,13 +8,13 @@
 #include <math.h>
 #include <string.h>
 
-const float SETPOINT = 0.0f;
+float setpoint = 0.0f;
 
 PIDController pid(5.0f, 0.01f, 0.5f);
 
 bool pidRunning = false;
 
-char commandBuffer[20];
+char commandBuffer[40];
 int commandIndex = 0;
 bool hasPendingCommand = false;
 absolute_time_t lastCommandTime;
@@ -25,9 +25,9 @@ const int MOTOR_PIN_P_2 = 22;
 const int MOTOR_PIN_Q_1 = 27;
 const int MOTOR_PIN_Q_2 = 26;
 
-const float MAX_PID_OUTPUT = 60.0f;
-const float MAX_PWM = 100.0f;
-const float MOTOR_START_PWM = 20.0f;
+float maxPidOutput = 60.0f;
+float maxPwm = 100.0f;
+float motorStartPwm = 20.0f;
 
 #define LED_GREEN 13
 #define LED_RED 12
@@ -72,6 +72,7 @@ void mpu6050_read_raw(int16_t accel[3], int16_t gyro[3], int16_t *temp);
 void clearCommandBuffer();
 void processCommand();
 void handleSerialCommands();
+void printSettings();
 
 int main() {
     stdio_init_all();
@@ -148,10 +149,8 @@ int main() {
     clearCommandBuffer();
 
     printf("PID is stopped.\n");
-    printf("Type 'start' to run PID.\n");
-    printf("Type 'stop' to stop motors.\n");
-    printf("Command: ");
-    fflush(stdout);
+    printf("Commands: start, stop, setpoint 0, maxpidoutput 50, motorstartpwm 20, kp 5, ki 0.01, kd 0.5\n");
+    printSettings();
 
     lastStatusPrint = get_absolute_time();
 
@@ -180,41 +179,43 @@ int main() {
         roll = 0.98f * roll + 0.02f * roll_acc;
         pitch = 0.98f * pitch + 0.02f * pitch_acc;
 
-        float roll_out = roll + 2.3f;
-        float pitch_out = pitch + 4.4f;
+        float angle = roll + 2.3f;
+
+        float pValue = 0.0f;
+        float iValue = 0.0f;
+        float dValue = 0.0f;
 
         float pidOutput = 0.0f;
+        float motorOutput = 0.0f;
         float pwmA = 0.0f;
         float pwmB = 0.0f;
-        float motorOutput = 0.0f;
 
         if (pidRunning) {
-            pidOutput = pid.update(SETPOINT, roll_out, dt);
+            pidOutput = pid.update(setpoint, angle, dt, pValue, iValue, dValue);
 
             convertPidToMotor(pidOutput, pwmA, pwmB, motorOutput);
 
             driveMotors(pwmA, pwmB);
         } else {
             stopMotors();
+            pid.reset();
         }
 
         absolute_time_t now = get_absolute_time();
         int64_t time_since_status = absolute_time_diff_us(lastStatusPrint, now);
 
-        if (time_since_status > 500000) {
+        if (time_since_status > 50000) {
             lastStatusPrint = now;
 
-            printf("\nstate = %s | roll = %.2f | pitch = %.2f | pid = %.2f | motor = %.2f | pwmA = %.2f | pwmB = %.2f\n",
-                   pidRunning ? "running" : "stopped",
-                   roll_out,
-                   pitch_out,
+            printf("angle=%.2f | pid=%.2f | p=%.2f | i=%.2f | d=%.2f | motor=%.2f | pwmA=%.2f | pwmB=%.2f\n",
+                   angle,
                    pidOutput,
+                   pValue,
+                   iValue,
+                   dValue,
                    motorOutput,
                    pwmA,
                    pwmB);
-
-            printf("Command: ");
-            fflush(stdout);
         }
 
         sleep_ms(10);
@@ -243,8 +244,14 @@ void setupMotorPWM(int pin) {
 }
 
 void convertPidToMotor(float pidOutput, float &pwmA, float &pwmB, float &motorOutput) {
-    motorOutput = pidOutput / MAX_PID_OUTPUT * MAX_PWM;
-    motorOutput = constrainValue(motorOutput, -MAX_PWM, MAX_PWM);
+    float availablePwmRange = maxPwm - motorStartPwm;
+
+    if (availablePwmRange < 0.0f) {
+        availablePwmRange = 0.0f;
+    }
+
+    motorOutput = pidOutput / maxPidOutput * availablePwmRange;
+    motorOutput = constrainValue(motorOutput, -availablePwmRange, availablePwmRange);
 
     if (motorOutput > 0.0f) {
         pwmA = motorOutput;
@@ -263,9 +270,9 @@ float addMotorStartPower(float pwm) {
         return 0.0f;
     }
 
-    float adjustedPwm = MOTOR_START_PWM + pwm;
+    float adjustedPwm = motorStartPwm + pwm;
 
-    return constrainValue(adjustedPwm, 0.0f, MAX_PWM);
+    return constrainValue(adjustedPwm, 0.0f, maxPwm);
 }
 
 void driveMotors(float pwmA, float pwmB) {
@@ -307,7 +314,7 @@ void resetPid() {
 }
 
 void clearCommandBuffer() {
-    for (int i = 0; i < 20; i++) {
+    for (int i = 0; i < 40; i++) {
         commandBuffer[i] = '\0';
     }
 
@@ -323,24 +330,59 @@ void processCommand() {
         return;
     }
 
-    if (strcmp(commandBuffer, "start") == 0) {
-        resetPid();
-        pidRunning = true;
-        printf("\nPID started\n");
-    } else if (strcmp(commandBuffer, "stop") == 0) {
-        pidRunning = false;
-        resetPid();
-        stopMotors();
-        printf("\nPID stopped, motors off\n");
-    } else {
-        printf("\nUnknown command: %s\n", commandBuffer);
-        printf("Use 'start' or 'stop'\n");
+    char command[20];
+    float value = 0.0f;
+
+    int parts = sscanf(commandBuffer, "%19s %f", command, &value);
+
+    if (parts >= 1) {
+        if (strcmp(command, "start") == 0) {
+            resetPid();
+            pidRunning = true;
+            printf("\nPID started\n");
+        } else if (strcmp(command, "stop") == 0) {
+            pidRunning = false;
+            resetPid();
+            stopMotors();
+            printf("\nPID stopped, motors off\n");
+        } else if (strcmp(command, "setpoint") == 0 && parts == 2) {
+            setpoint = value;
+            resetPid();
+            printf("\nsetpoint set to %.2f\n", setpoint);
+        } else if (strcmp(command, "maxpidoutput") == 0 && parts == 2) {
+            maxPidOutput = constrainValue(value, 1.0f, 1000.0f);
+            resetPid();
+            printf("\nmaxPidOutput set to %.2f\n", maxPidOutput);
+        } else if (strcmp(command, "motorstartpwm") == 0 && parts == 2) {
+            motorStartPwm = constrainValue(value, 0.0f, maxPwm);
+            resetPid();
+            printf("\nmotorStartPwm set to %.2f\n", motorStartPwm);
+        } else if (strcmp(command, "kp") == 0 && parts == 2) {
+            pid.setKp(value);
+            resetPid();
+            printf("\nKp set to %.4f\n", value);
+        } else if (strcmp(command, "ki") == 0 && parts == 2) {
+            pid.setKi(value);
+            resetPid();
+            printf("\nKi set to %.4f\n", value);
+        } else if (strcmp(command, "kd") == 0 && parts == 2) {
+            pid.setKd(value);
+            resetPid();
+            printf("\nKd set to %.4f\n", value);
+        } else if (strcmp(command, "settings") == 0) {
+            printSettings();
+        } else if (strcmp(command, "stopmotors") == 0) {
+            pidRunning = false;
+            resetPid();
+            stopMotors();
+            printf("\nFORCE STOP: motors off\n");
+        } else {
+            printf("\nUnknown command: %s\n", commandBuffer);
+            printf("Use: start, stop, setpoint 0, maxpidoutput 50, motorstartpwm 20, kp 5, ki 0.01, kd 0.5, settings\n");
+        } 
     }
 
     clearCommandBuffer();
-
-    printf("Command: ");
-    fflush(stdout);
 }
 
 void handleSerialCommands() {
@@ -375,7 +417,7 @@ void handleSerialCommands() {
         return;
     }
 
-    if (commandIndex < 19) {
+    if (commandIndex < 39) {
         commandBuffer[commandIndex] = (char)ch;
         commandIndex++;
         commandBuffer[commandIndex] = '\0';
@@ -388,9 +430,18 @@ void handleSerialCommands() {
     } else {
         printf("\nCommand too long, clearing input\n");
         clearCommandBuffer();
-        printf("Command: ");
-        fflush(stdout);
     }
+}
+
+void printSettings() {
+    printf("\nSettings:\n");
+    printf("setpoint = %.2f\n", setpoint);
+    printf("kp = %.4f\n", pid.getKp());
+    printf("ki = %.4f\n", pid.getKi());
+    printf("kd = %.4f\n", pid.getKd());
+    printf("maxPidOutput = %.2f\n", maxPidOutput);
+    printf("motorStartPwm = %.2f\n", motorStartPwm);
+    printf("maxPwm = %.2f\n\n", maxPwm);
 }
 
 void mpu6050_reset() {
