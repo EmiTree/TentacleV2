@@ -23,6 +23,9 @@ public:
     void printStatus();
     void printHelp();
 
+    void setMinAngle(float minAngle);
+    void setMaxAngle(float maxAngle);
+
 private:
     int servoPins[4];
     float servoSpeeds[4];

@@ -12,8 +12,8 @@ const int SERVO_MAX_US = 2000;
 const float MIN_SPEED = -100.0f;
 const float MAX_SPEED = 100.0f;
 
-const float MIN_REAL_ANGLE_DEGREES = -360.0f;
-const float MAX_REAL_ANGLE_DEGREES = 360.0f;
+float MIN_REAL_ANGLE_DEGREES = -360.0f;
+float MAX_REAL_ANGLE_DEGREES = 360.0f;
 
 const float INTERNAL_DEGREES_FOR_90_REAL_DEGREES = 22.0f;
 const float ANGLE_MOVE_SPEED = 25.0f;
@@ -301,6 +301,28 @@ void ServoActuator::printStatus() {
            MIN_REAL_ANGLE_DEGREES,
            MAX_REAL_ANGLE_DEGREES);
     printf("--------------------\n");
+}
+
+void ServoActuator::setMinAngle(float minAngle) {
+    MIN_REAL_ANGLE_DEGREES = minAngle;
+
+    if (MIN_REAL_ANGLE_DEGREES > MAX_REAL_ANGLE_DEGREES) {
+        MAX_REAL_ANGLE_DEGREES = MIN_REAL_ANGLE_DEGREES;
+    }
+
+    printf("\nServo minimum angle set to %.1f degrees\n", MIN_REAL_ANGLE_DEGREES);
+    printStatus();
+}
+
+void ServoActuator::setMaxAngle(float maxAngle) {
+    MAX_REAL_ANGLE_DEGREES = maxAngle;
+
+    if (MAX_REAL_ANGLE_DEGREES < MIN_REAL_ANGLE_DEGREES) {
+        MIN_REAL_ANGLE_DEGREES = MAX_REAL_ANGLE_DEGREES;
+    }
+
+    printf("\nServo maximum angle set to %.1f degrees\n", MAX_REAL_ANGLE_DEGREES);
+    printStatus();
 }
 
 void ServoActuator::printHelp() {

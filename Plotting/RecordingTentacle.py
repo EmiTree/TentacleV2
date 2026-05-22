@@ -7,7 +7,9 @@ import matplotlib.pyplot as plt
 SERIAL_PORT = "COM9"
 BAUD_RATE = 115200
 
-pattern = re.compile(
+PRINT_INTERVAL_SECONDS = 0.10
+
+old_line_pattern = re.compile(
     r"angle=([-0-9.]+)\s*\|\s*"
     r"pid=([-0-9.]+)\s*\|\s*"
     r"p=([-0-9.]+)\s*\|\s*"
@@ -17,6 +19,8 @@ pattern = re.compile(
     r"pwmA=([-0-9.]+)\s*\|\s*"
     r"pwmB=([-0-9.]+)"
 )
+
+key_value_pattern = re.compile(r"^([A-Za-z0-9_]+)\s*=\s*([-0-9.]+)$")
 
 data = {
     "time": [],
@@ -35,17 +39,70 @@ finished = False
 start_time = None
 last_terminal_print = 0
 
+serial_lock = threading.Lock()
+
+current_live_values = {}
+
 
 def clear_data():
     for key in data:
         data[key].clear()
 
 
-def serial_reader(ser):
-    global recording
-    global finished
-    global start_time
+def send_command(ser, command):
+    with serial_lock:
+        ser.write((command + "\n").encode())
+
+
+def append_sample(values):
     global last_terminal_print
+
+    if not recording or start_time is None:
+        return
+
+    required_keys = [
+        "angle",
+        "pidOutput",
+        "p",
+        "i",
+        "d",
+        "motorOutput",
+        "pwmA",
+        "pwmB",
+    ]
+
+    for key in required_keys:
+        if key not in values:
+            return
+
+    current_time = time.time() - start_time
+
+    data["time"].append(current_time)
+    data["angle"].append(values["angle"])
+    data["pid"].append(values["pidOutput"])
+    data["p"].append(values["p"])
+    data["i"].append(values["i"])
+    data["d"].append(values["d"])
+    data["motor"].append(values["motorOutput"])
+    data["pwmA"].append(values["pwmA"])
+    data["pwmB"].append(values["pwmB"])
+
+    if time.time() - last_terminal_print > 0.5:
+        last_terminal_print = time.time()
+        print(
+            f"t={current_time:.2f}s | "
+            f"angle={values['angle']:.2f} | "
+            f"pid={values['pidOutput']:.2f} | "
+            f"motor={values['motorOutput']:.2f} | "
+            f"pwmA={values['pwmA']:.2f} | "
+            f"pwmB={values['pwmB']:.2f} | "
+            f"samples={len(data['time'])}"
+        )
+
+
+def serial_reader(ser):
+    global finished
+    global current_live_values
 
     while not finished:
         line = ser.readline().decode(errors="ignore").strip()
@@ -53,38 +110,58 @@ def serial_reader(ser):
         if not line:
             continue
 
-        match = pattern.search(line)
+        old_match = old_line_pattern.search(line)
 
-        if not match:
-            if "Settings:" in line or "=" in line or "stopped" in line or "STOP" in line:
-                print(line)
+        if old_match:
+            values = [float(value) for value in old_match.groups()]
+
+            append_sample(
+                {
+                    "angle": values[0],
+                    "pidOutput": values[1],
+                    "p": values[2],
+                    "i": values[3],
+                    "d": values[4],
+                    "motorOutput": values[5],
+                    "pwmA": values[6],
+                    "pwmB": values[7],
+                }
+            )
+
             continue
 
+        key_value_match = key_value_pattern.match(line)
+
+        if key_value_match:
+            key = key_value_match.group(1)
+            value = float(key_value_match.group(2))
+
+            current_live_values[key] = value
+
+            if key == "pwmB":
+                append_sample(current_live_values)
+                current_live_values = {}
+
+            continue
+
+        if (
+            "settings" in line.lower()
+            or "stopped" in line.lower()
+            or "started" in line.lower()
+            or "FORCE" in line
+            or "failed" in line.lower()
+            or "mpu" in line.lower()
+            or "command" in line.lower()
+        ):
+            print(line)
+
+
+def print_requester(ser):
+    while not finished:
         if recording:
-            values = [float(value) for value in match.groups()]
-            current_time = time.time() - start_time
+            send_command(ser, "print")
 
-            data["time"].append(current_time)
-            data["angle"].append(values[0])
-            data["pid"].append(values[1])
-            data["p"].append(values[2])
-            data["i"].append(values[3])
-            data["d"].append(values[4])
-            data["motor"].append(values[5])
-            data["pwmA"].append(values[6])
-            data["pwmB"].append(values[7])
-
-            if time.time() - last_terminal_print > 0.5:
-                last_terminal_print = time.time()
-                print(
-                    f"t={current_time:.2f}s | "
-                    f"angle={values[0]:.2f} | "
-                    f"pid={values[1]:.2f} | "
-                    f"motor={values[5]:.2f} | "
-                    f"pwmA={values[6]:.2f} | "
-                    f"pwmB={values[7]:.2f} | "
-                    f"samples={len(data['time'])}"
-                )
+        time.sleep(PRINT_INTERVAL_SECONDS)
 
 
 def style_axis(ax, title, ylabel, zero_line=True):
@@ -106,7 +183,7 @@ def plot_data():
     print(f"\nRecorded {len(data['time'])} samples.")
     print(f"Recording duration: {duration:.2f} seconds.")
 
-    if len(data["time"]) > 1:
+    if len(data["time"]) > 1 and duration > 0:
         average_dt = duration / (len(data["time"]) - 1)
 
         print(f"Average graph sample dt: {average_dt:.3f} seconds.")
@@ -157,14 +234,24 @@ def main():
     time.sleep(2)
 
     reader_thread = threading.Thread(target=serial_reader, args=(ser,))
+    print_thread = threading.Thread(target=print_requester, args=(ser,))
+
     reader_thread.start()
+    print_thread.start()
 
     print("\nReady.")
     print("Type 'start' to start PID and recording.")
     print("Type 's' to stop PID, stop recording, and show graphs.")
-    print("Type 'stopmotors' to force motors off immediately.")
-    print("Type 'show' to print current settings.")
-    print("You can also type: kp 3, ki 0, kd 0.2, maxpidoutput 80\n")
+    print("Type 'FORCE' to immediately stop PID, motors, and servos.")
+    print("Type 'show' to request all settings.")
+    print("Type 'print' to request one live value print.")
+    print("You can also type Pico commands directly, for example:")
+    print("  kp 3")
+    print("  ki 0")
+    print("  kd 0.2")
+    print("  motor deadband off")
+    print("  motor curve 1.5")
+    print("  servo status\n")
 
     while True:
         command = input("> ").strip()
@@ -174,34 +261,51 @@ def main():
             start_time = time.time()
             recording = True
 
-            ser.write(b"start\n")
-            print("Recording started.")
+            send_command(ser, "pid start")
+            print("PID started. Recording started.")
 
         elif command == "s" or command == "stop":
-            ser.write(b"stop\n")
+            send_command(ser, "pid stop")
             recording = False
             finished = True
 
             print("Recording stopped.")
             break
 
-        elif command == "stopmotors":
-            ser.write(b"stopmotors\n")
+        elif command == "FORCE":
+            send_command(ser, "FORCE")
             recording = False
             finished = True
 
-            print("Force stop command sent.")
+            print("FORCE command sent.")
+            break
+
+        elif command == "stopmotors":
+            send_command(ser, "stopmotors")
+            recording = False
+            finished = True
+
+            print("Stop motors command sent.")
             break
 
         elif command == "show":
-            ser.write(b"settings\n")
-            print("Requested current settings from Pico.")
+            send_command(ser, "settings")
+            print("Requested all settings from Pico.")
 
-        else:
-            ser.write((command + "\n").encode())
+        elif command == "print":
+            send_command(ser, "print")
+            print("Requested live values from Pico.")
+
+        elif command == "help":
+            send_command(ser, "help")
+            print("Requested help from Pico.")
+
+        elif command:
+            send_command(ser, command)
             print(f"Sent command: {command}")
 
     reader_thread.join()
+    print_thread.join()
     ser.close()
 
     plot_data()

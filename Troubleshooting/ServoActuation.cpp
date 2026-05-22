@@ -25,8 +25,6 @@
         Servo GND wires -> external power supply GND
         Pico GND        -> same external power supply GND
 
-    Important:
-        Do not power four servos from the Pico 3V3 pin.
 
     Failsafe:
         Each servo has its own estimated angle.
@@ -57,8 +55,8 @@ const int SERVO_MAX_US = 2000;
 const float MIN_SPEED = -100.0f;
 const float MAX_SPEED = 100.0f;
 
-const float MIN_REAL_ANGLE_DEGREES = -360.0f;
-const float MAX_REAL_ANGLE_DEGREES = 360.0f;
+float minRealAngleDegrees = -360.0f;
+float maxRealAngleDegrees = 360.0f;
 
 /*
     Your angle command calibration:
@@ -112,7 +110,7 @@ void setupServoPwm(int pin) {
     uint slice = pwm_gpio_to_slice_num(pin);
     pwm_config config = pwm_get_default_config();
 
-    pwm_config_set_clkdiv(&config, 125.0f);
+    pwm_config_set_clkdiv(&config, 125.0f); // 1 tick = 0.08 us, so 1000 us pulse = 12500 ticks, which fits in 16 bits with a wrap of 20000
     pwm_config_set_wrap(&config, PWM_WRAP);
 
     pwm_init(slice, &config, true);
@@ -136,12 +134,12 @@ void setServoSpeedPin(int servoIndex, float speedPercent) {
 void setOneServoSpeedByIndex(int servoIndex, float speedPercent) {
     speedPercent = clampFloat(speedPercent, MIN_SPEED, MAX_SPEED);
 
-    if (estimatedAngles[servoIndex] >= MAX_REAL_ANGLE_DEGREES && speedPercent > 0.0f) {
+    if (estimatedAngles[servoIndex] >= maxRealAngleDegrees && speedPercent > 0.0f) {
         speedPercent = 0.0f;
         printf("\nServo %d blocked: maximum estimated angle reached\n", servoIndex + 1);
     }
 
-    if (estimatedAngles[servoIndex] <= MIN_REAL_ANGLE_DEGREES && speedPercent < 0.0f) {
+    if (estimatedAngles[servoIndex] <= minRealAngleDegrees && speedPercent < 0.0f) {
         speedPercent = 0.0f;
         printf("\nServo %d blocked: minimum estimated angle reached\n", servoIndex + 1);
     }
@@ -175,8 +173,8 @@ void printServoStatus() {
     }
 
     printf("Allowed range per servo: %.1f to %.1f degrees\n",
-           MIN_REAL_ANGLE_DEGREES,
-           MAX_REAL_ANGLE_DEGREES);
+           minRealAngleDegrees,
+           maxRealAngleDegrees);
     printf("--------------------\n");
 }
 
@@ -214,8 +212,8 @@ void updateEstimatedAnglesAndFailsafes() {
 
         estimatedAngles[i] += realDegreesMoved;
 
-        if (estimatedAngles[i] >= MAX_REAL_ANGLE_DEGREES) {
-            estimatedAngles[i] = MAX_REAL_ANGLE_DEGREES;
+        if (estimatedAngles[i] >= maxRealAngleDegrees) {
+            estimatedAngles[i] = maxRealAngleDegrees;
             servoSpeeds[i] = 0.0f;
             setServoSpeedPin(i, 0.0f);
 
@@ -223,8 +221,8 @@ void updateEstimatedAnglesAndFailsafes() {
             printServoStatus();
             printf("\nEnter command: ");
             fflush(stdout);
-        } else if (estimatedAngles[i] <= MIN_REAL_ANGLE_DEGREES) {
-            estimatedAngles[i] = MIN_REAL_ANGLE_DEGREES;
+        } else if (estimatedAngles[i] <= minRealAngleDegrees) {
+            estimatedAngles[i] = minRealAngleDegrees;
             servoSpeeds[i] = 0.0f;
             setServoSpeedPin(i, 0.0f);
 
@@ -318,7 +316,7 @@ void stopServos() {
 void moveToAngle(float targetRealAngle) {
     updateEstimatedAnglesAndFailsafes();
 
-    targetRealAngle = clampFloat(targetRealAngle, MIN_REAL_ANGLE_DEGREES, MAX_REAL_ANGLE_DEGREES);
+    targetRealAngle = clampFloat(targetRealAngle, minRealAngleDegrees, maxRealAngleDegrees);
 
     /*
         Use servo 1 as the reference for all-servo angle moves.
@@ -339,7 +337,7 @@ void moveByAngle(float realAngleDifference) {
     updateEstimatedAnglesAndFailsafes();
 
     float targetRealAngle = estimatedAngles[0] + realAngleDifference;
-    targetRealAngle = clampFloat(targetRealAngle, MIN_REAL_ANGLE_DEGREES, MAX_REAL_ANGLE_DEGREES);
+    targetRealAngle = clampFloat(targetRealAngle, minRealAngleDegrees, maxRealAngleDegrees);
 
     float correctedDifference = targetRealAngle - estimatedAngles[0];
 
@@ -378,6 +376,8 @@ void printHelp() {
     printf("stop      -> stop all servos\n");
     printf("status    -> print servo status\n");
     printf("help      -> print this help text\n\n");
+    printf("minangle -360 -> set minimum allowed estimated angle\n");
+    printf("maxangle 500  -> set maximum allowed estimated angle\n");
 }
 
 void clearInputBuffer() {
@@ -420,6 +420,24 @@ void processInput() {
             moveToAngle(value);
         } else if (strcmp(command, "move") == 0 && parts == 2) {
             moveByAngle(value);
+        } else if (strcmp(command, "minangle") == 0 && parts == 2) {
+            minRealAngleDegrees = value;
+
+            if (minRealAngleDegrees > maxRealAngleDegrees) {
+                maxRealAngleDegrees = minRealAngleDegrees;
+            }
+
+            printf("\nMinimum angle set to %.1f degrees\n", minRealAngleDegrees);
+            printServoStatus();
+        } else if (strcmp(command, "maxangle") == 0 && parts == 2) {
+            maxRealAngleDegrees = value;
+
+            if (maxRealAngleDegrees < minRealAngleDegrees) {
+                minRealAngleDegrees = maxRealAngleDegrees;
+            }
+
+            printf("\nMaximum angle set to %.1f degrees\n", maxRealAngleDegrees);
+            printServoStatus();
         } else if (strcmp(command, "zero") == 0) {
             zeroAngleHere();
         } else if (strcmp(command, "stop") == 0 || strcmp(command, "0") == 0) {
