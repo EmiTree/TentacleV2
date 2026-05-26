@@ -92,6 +92,29 @@ int inputIndex = 0;
 bool hasPendingInput = false;
 absolute_time_t lastInputTime;
 
+
+const float CURVING_SERVO_1_SPEED = 100.0f;
+const float CURVING_SERVO_2_SPEED = -100.0f;
+const float CURVING_SERVO_3_SPEED = 0.0f;
+const float CURVING_SERVO_4_SPEED = 0.0f;
+
+const uint32_t CURVING_DURATION_MS = 2500;
+
+bool curvingRunning = false;
+absolute_time_t curvingEndTime;
+
+
+const float UNDO_CURVING_SERVO_1_SPEED = -60.0f;
+const float UNDO_CURVING_SERVO_2_SPEED = 60.0f;
+const float UNDO_CURVING_SERVO_3_SPEED = 0.0f;
+const float UNDO_CURVING_SERVO_4_SPEED = 0.0f;
+
+const uint32_t UNDO_CURVING_DURATION_MS = 1300;
+
+bool undoCurvingRunning = false;
+absolute_time_t undoCurvingEndTime;
+
+
 float clampFloat(float value, float low, float high) {
     if (value < low) return low;
     if (value > high) return high;
@@ -309,8 +332,73 @@ void stopServos() {
     timedMoveRunning = false;
     stopServosQuietly();
 
+    timedMoveRunning = false;
+    curvingRunning = false;
+
     printf("\nServos stopped\n");
     printServoStatus();
+}
+
+void Curving() {
+    updateEstimatedAnglesAndFailsafes();
+
+    timedMoveRunning = false;
+    curvingRunning = true;
+    curvingEndTime = make_timeout_time_ms(CURVING_DURATION_MS);
+
+    setOneServoSpeedByIndex(0, CURVING_SERVO_1_SPEED);
+    setOneServoSpeedByIndex(1, CURVING_SERVO_2_SPEED);
+    setOneServoSpeedByIndex(2, CURVING_SERVO_3_SPEED);
+    setOneServoSpeedByIndex(3, CURVING_SERVO_4_SPEED);
+
+    printf("\nCurving started for %lu ms\n", CURVING_DURATION_MS);
+    printServoStatus();
+}
+
+void undoCurving() {
+    updateEstimatedAnglesAndFailsafes();
+
+    timedMoveRunning = false;
+    curvingRunning = false;
+    undoCurvingRunning = true;
+    undoCurvingEndTime = make_timeout_time_ms(UNDO_CURVING_DURATION_MS);
+
+    setOneServoSpeedByIndex(0, UNDO_CURVING_SERVO_1_SPEED);
+    setOneServoSpeedByIndex(1, UNDO_CURVING_SERVO_2_SPEED);
+    setOneServoSpeedByIndex(2, UNDO_CURVING_SERVO_3_SPEED);
+    setOneServoSpeedByIndex(3, UNDO_CURVING_SERVO_4_SPEED);
+
+    printf("\nUndo curving started for %lu ms\n", UNDO_CURVING_DURATION_MS);
+    printServoStatus();
+}
+
+
+void updateUndoCurving() {
+    if (undoCurvingRunning && absolute_time_diff_us(get_absolute_time(), undoCurvingEndTime) <= 0) {
+        stopServosQuietly();
+
+        undoCurvingRunning = false;
+
+        printf("\nUndo curving complete. Servos stopped.\n");
+        printServoStatus();
+        printf("\nEnter command: ");
+        fflush(stdout);
+    }
+}
+
+
+
+void updateCurving() {
+    if (curvingRunning && absolute_time_diff_us(get_absolute_time(), curvingEndTime) <= 0) {
+        stopServosQuietly();
+
+        curvingRunning = false;
+
+        printf("\nCurving complete. Servos stopped.\n");
+        printServoStatus();
+        printf("\nEnter command: ");
+        fflush(stdout);
+    }
 }
 
 void moveToAngle(float targetRealAngle) {
@@ -379,6 +467,9 @@ void printHelp() {
     printf("minangle -360 -> set minimum allowed estimated angle\n");
     printf("maxangle 500  -> set maximum allowed estimated angle\n");
     printf("s1 20 s2 20 s3 20 s4 20 -> set multiple servo speeds in one command\n");
+    printf("curving   -> s1/s2 at 30%%, s3/s4 at -10%%, then stop after 10 seconds\n");
+    printf("curving      -> s1/s2 at 30%%, s3/s4 at -10%%, then stop after 10 seconds\n");
+    printf("undocurving  -> reverse curving for 10 seconds, then stop\n");
 }
 
 void clearInputBuffer() {
@@ -446,9 +537,14 @@ void processInput() {
         } else if (strcmp(command, "zero") == 0) {
             zeroAngleHere();
 
+        } else if (strcmp(command, "curving") == 0) {
+            Curving();
+        } else if (strcmp(command, "undocurving") == 0) {
+            undoCurving();
+
         } else if (strcmp(command, "stop") == 0 || strcmp(command, "0") == 0) {
             stopServos();
-
+    
         } else if (strcmp(command, "status") == 0) {
             printServoStatus();
 
@@ -600,6 +696,8 @@ int main() {
         handleSerialInput();
         updateEstimatedAnglesAndFailsafes();
         updateTimedMove();
+        updateCurving();
+        updateUndoCurving();
         sleep_ms(10);
     }
 }

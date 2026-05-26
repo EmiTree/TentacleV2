@@ -894,7 +894,7 @@ void handleSerialCommands() {
             absolute_time_t now = get_absolute_time();
             int64_t time_since_command = absolute_time_diff_us(lastCommandTime, now);
 
-            if (time_since_command > 500000) {
+            if (time_since_command > 500000) { 
                 processCommand();
             }
         }
@@ -902,12 +902,12 @@ void handleSerialCommands() {
         return;
     }
 
-    if (ch == '\r' || ch == '\n') {
+    if (ch == '\r' || ch == '\n') { // If the character is a newline, process the command.
         processCommand();
         return;
     }
 
-    if (ch == 8 || ch == 127) {
+    if (ch == 8 || ch == 127) { // If the character is backspace, remove the last character from the command buffer.
         if (commandIndex > 0) {
             commandIndex--;
             commandBuffer[commandIndex] = '\0';
@@ -918,7 +918,7 @@ void handleSerialCommands() {
         return;
     }
 
-    if (commandIndex < 39) {
+    if (commandIndex < 39) { // If the character is a regular character and there is space in the buffer, add it to the command buffer.
         commandBuffer[commandIndex] = (char)ch;
         commandIndex++;
         commandBuffer[commandIndex] = '\0';
