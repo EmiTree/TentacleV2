@@ -370,7 +370,7 @@ int main() {
                             pidOutput = total correction
                             p/i/d     = separate parts for debugging
                     */
-                    pidOutput = pid.update(setpoint, angle, dt, pValue, iValue, dValue);
+                    pidOutput = pid.update(setpoint, angle, gx, dt, pValue, iValue, dValue);
 
                     /*
                         Convert PID output into motor PWM. See MotorConverter class for details.
