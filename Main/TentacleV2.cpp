@@ -760,11 +760,11 @@ void processCommand() {
             } else if (strcmp(subCommand, "s1") == 0 && parts == 3) { // If the subcommand is "s1" and a numeric value is provided, set the speed of servo 1 to that value (as a percentage).
                 servo.setServo1Speed(value);
             } else if (strcmp(subCommand, "s2") == 0 && parts == 3) { // If the subcommand is "s2" and a numeric value is provided, set the speed of servo 2 to that value (as a percentage).
-                servo.setServo2Speed(value);
+                servo.setServo2Speed(-value);
             } else if (strcmp(subCommand, "s3") == 0 && parts == 3) { // If the subcommand is "s3" and a numeric value is provided, set the speed of servo 3 to that value (as a percentage).
                 servo.setServo3Speed(value);
             } else if (strcmp(subCommand, "s4") == 0 && parts == 3) { // If the subcommand is "s4" and a numeric value is provided, set the speed of servo 4 to that value (as a percentage).
-                servo.setServo4Speed(value);
+                servo.setServo4Speed(-value);
             } else if (subCommand[0] == '+' || subCommand[0] == '-' || (subCommand[0] >= '0' && subCommand[0] <= '9')) { // If the subcommand starts with a +, -, or a digit, and a numeric value is provided, set the speed of all servos to that value (as a percentage).
                 servo.setSpeed((float)atof(subCommand));
             } else if (strcmp(subCommand, "minangle") == 0 && parts == 3) {

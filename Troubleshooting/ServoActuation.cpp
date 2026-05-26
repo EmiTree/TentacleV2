@@ -55,8 +55,8 @@ const int SERVO_MAX_US = 2000;
 const float MIN_SPEED = -100.0f;
 const float MAX_SPEED = 100.0f;
 
-float minRealAngleDegrees = -360.0f;
-float maxRealAngleDegrees = 360.0f;
+float minRealAngleDegrees = -100000000.0f;
+float maxRealAngleDegrees = 100000000.0f;
 
 /*
     Your angle command calibration:
@@ -378,6 +378,7 @@ void printHelp() {
     printf("help      -> print this help text\n\n");
     printf("minangle -360 -> set minimum allowed estimated angle\n");
     printf("maxangle 500  -> set maximum allowed estimated angle\n");
+    printf("s1 20 s2 20 s3 20 s4 20 -> set multiple servo speeds in one command\n");
 }
 
 void clearInputBuffer() {
@@ -418,8 +419,10 @@ void processInput() {
     if (parts >= 1) {
         if (strcmp(command, "angle") == 0 && parts == 2) {
             moveToAngle(value);
+
         } else if (strcmp(command, "move") == 0 && parts == 2) {
             moveByAngle(value);
+
         } else if (strcmp(command, "minangle") == 0 && parts == 2) {
             minRealAngleDegrees = value;
 
@@ -429,6 +432,7 @@ void processInput() {
 
             printf("\nMinimum angle set to %.1f degrees\n", minRealAngleDegrees);
             printServoStatus();
+
         } else if (strcmp(command, "maxangle") == 0 && parts == 2) {
             maxRealAngleDegrees = value;
 
@@ -438,24 +442,76 @@ void processInput() {
 
             printf("\nMaximum angle set to %.1f degrees\n", maxRealAngleDegrees);
             printServoStatus();
+
         } else if (strcmp(command, "zero") == 0) {
             zeroAngleHere();
+
         } else if (strcmp(command, "stop") == 0 || strcmp(command, "0") == 0) {
             stopServos();
+
         } else if (strcmp(command, "status") == 0) {
             printServoStatus();
+
         } else if (strcmp(command, "help") == 0) {
             printHelp();
-        } else if (strcmp(command, "s1") == 0 && parts == 2) {
-            setOneServoSpeed(1, value);
-        } else if (strcmp(command, "s2") == 0 && parts == 2) {
-            setOneServoSpeed(2, value);
-        } else if (strcmp(command, "s3") == 0 && parts == 2) {
-            setOneServoSpeed(3, value);
-        } else if (strcmp(command, "s4") == 0 && parts == 2) {
-            setOneServoSpeed(4, value);
+
+        } else if (
+            strcmp(command, "s1") == 0 ||
+            strcmp(command, "s2") == 0 ||
+            strcmp(command, "s3") == 0 ||
+            strcmp(command, "s4") == 0
+        ) {
+            char servoCommand[12];
+            float servoValue = 0.0f;
+            char *cursor = inputBuffer;
+            bool commandOk = true;
+
+            while (*cursor != '\0') {
+                int readParts = sscanf(cursor, "%11s %f", servoCommand, &servoValue);
+
+                if (readParts != 2) {
+                    commandOk = false;
+                    break;
+                }
+
+                if (strcmp(servoCommand, "s1") == 0) {
+                    setOneServoSpeed(1, servoValue);
+                } else if (strcmp(servoCommand, "s2") == 0) {
+                    setOneServoSpeed(2, -servoValue);
+                } else if (strcmp(servoCommand, "s3") == 0) {
+                    setOneServoSpeed(3, servoValue);
+                } else if (strcmp(servoCommand, "s4") == 0) {
+                    setOneServoSpeed(4, -servoValue);
+                } else {
+                    commandOk = false;
+                    break;
+                }
+
+                while (*cursor != '\0' && *cursor != ' ') {
+                    cursor++;
+                }
+
+                while (*cursor == ' ') {
+                    cursor++;
+                }
+
+                while (*cursor != '\0' && *cursor != ' ') {
+                    cursor++;
+                }
+
+                while (*cursor == ' ') {
+                    cursor++;
+                }
+            }
+
+            if (!commandOk) {
+                printf("\nInvalid servo command: %s\n", inputBuffer);
+                printHelp();
+            }
+
         } else if (command[0] == '+' || command[0] == '-' || (command[0] >= '0' && command[0] <= '9')) {
             setAllServosSpeed((float)atof(command));
+
         } else {
             printf("\nUnknown command: %s\n", inputBuffer);
             printHelp();
