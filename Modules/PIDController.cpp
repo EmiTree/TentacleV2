@@ -33,20 +33,20 @@ PIDController::PIDController(float kp, float ki, float kd) {
 
     This function is called repeatedly in the main loop while PID is running.
 */
-float PIDController::update(float setpoint, float measuredValue, float dt, float &pValue, float &iValue, float &dValue) {
+float PIDController::update(float setpoint, float measuredAngle, float measuredAngularVelocity, float dt, float &pValue, float &iValue, float &dValue) {
     /*
         error is how far away the measured value is from the target.
 
         Example:
             setpoint = 0
-            measuredValue = 5
+            measuredAngle = 5
 
             error = 0 - 5 = -5
 
         That means the system is 5 degrees away from the target in the negative
         correction direction.
     */
-    float error = setpoint - measuredValue;
+    float error = setpoint - measuredAngle;
 
     /*
         Integral term memory.
@@ -60,7 +60,8 @@ float PIDController::update(float setpoint, float measuredValue, float dt, float
         dt is included because the loop timing matters. Error for 0.01 seconds
         should count less than error for 1 full second.
     */
-    integral += error * dt;
+    // integral += error * dt;This is old and probabily does not work. Now trying to use the raw gyroscope data instead of integrating
+    integral = measuredAngularVelocity;
 
     /*
         derivative estimates how quickly the error is changing.

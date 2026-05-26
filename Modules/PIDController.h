@@ -52,7 +52,7 @@ public:
             The final PID output:
                 P + I + D
     */
-    float update(float setpoint, float measuredValue, float dt, float &pValue, float &iValue, float &dValue);
+    float update(float setpoint, float measuredAngle, float measuredAngularVelocity,  float dt, float &pValue, float &iValue, float &dValue);
 
     /*
         Reset the PID memory.
