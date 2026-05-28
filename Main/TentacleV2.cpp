@@ -5,6 +5,7 @@
 #include "ServoActuator.h"    // Your own servo control class from Modules/ServoActuator.
 #include "MotorConverter.h"   // Your own motor scaling class from Modules/MotorConverter.
 #include "MPU6050Sensor.h"  // Your own MPU6050 sensor class from Modules/MPU6050Sensor.
+#include "MotorDriver.h"
 
 
 #include <stdio.h>            // printf() and sscanf().
@@ -18,6 +19,9 @@ PIDController pid(5.0f, 0.01f, 0.5f); // PID tuning constants: Kp, Ki, Kd.
 MotorConverter motorConverter(60.0f, 80.0f, 20.0f); // Motor conversion settings: PID output limit, max PWM, motor start PWM.
 ServoActuator servo(14, 15, 16, 17); // ServoActuator(servo1Pin, servo2Pin, servo3Pin, servo4Pin) GP14, GP15, GP16, GP17 are the servo signal pins for servos 1-4 respectively.
 MPU6050Sensor mpu(i2c0, 0x68, 4, 5); // MPU6050 sensor (i2cPort, address, sdaPin, sclPin)
+MotorDriver motorDriver(21, 22, 27, 26); // MotorDriver(pinP1, pinP2, pinQ1, pinQ2) P1 = GP21 = Linkerwiel naar voren, P2 = GP22 = Linker naar achter, Q1 = GP27 = Rechterwiel naar voren, Q2  = GP26 = rechterwiel naar achter
+
+
 
 bool pidRunning = false; // Starts with PID off for safety. Type "start" to turn on PID and "stop" to turn it off.
 bool mpuOk = false; // This becomes true if the MPU6050 is successfully initialized and read. If it stays false, PID will not run, but servo commands and settings commands still work.
@@ -29,90 +33,6 @@ char commandBuffer[40];
 int commandIndex = 0;
 bool hasPendingCommand = false;
 absolute_time_t lastCommandTime;
-
-/*
-    Motor driver pins.
-    P1 = GP21 = Linkerwiel naar voren
-    P2 = GP22 = Linker naar achter
-    Q1 = GP27 = Rechterwiel naar voren
-    Q2  = GP26 = rechterwiel naar achter
-*/
-const int MOTOR_PIN_P_1 = 21;
-const int MOTOR_PIN_P_2 = 22;
-const int MOTOR_PIN_Q_1 = 27;
-const int MOTOR_PIN_Q_2 = 26;
-
-/*
-    LED pins.
-    Possible pins that show if the robot is in a safe region for balancing when starting the robot.
-    This function was used for testing the MPU and is not yet implemented in the current version of the robot.
-*/
-#define LED_GREEN 13
-#define LED_RED 12
-
-/*
-    I2C settings for the MPU6050.
-    MPU is connected to i2c0.
-    MPU6050 address is 0x68
-*/
-#define I2C_PORT i2c0
-#define MPU6050_ADDR 0x68
-
-/*
-    PWM resolution.
-
-    Motor PWM values are written from 0 to MAXIMUM_LEVEL.
-    With MAXIMUM_LEVEL = 1000:
-
-        0    means 0%
-        500  means 50%
-        1000 means 100%
-*/
-#define MAXIMUM_LEVEL 1000
-
-/*
-    MPU6050 register addresses.
-*/
-#define REG_PWR_MGMT_1 0x6B
-#define REG_ACCEL_XOUT_H 0x3B
-#define REG_GYRO_CONFIG 0x1B
-#define REG_ACCEL_CONFIG 0x1C
-#define REG_SMPLRT_DIV 0x19
-#define WHO_AM_I_REG 0x75
-
-/*
-    Sensor scale factors.
-
-    These convert raw MPU numbers into useful units:
-        accelerometer -> g
-        gyroscope     -> degrees per second
-*/
-#define ACCEL_SCALE_FACTOR_4G 8192.0f
-#define GYRO_SCALE_FACTOR_250DPS 131.0f
-#define ACCEL_SCALE_FACTOR ACCEL_SCALE_FACTOR_4G
-#define GYRO_SCALE_FACTOR GYRO_SCALE_FACTOR_250DPS
-
-/*
-    Sensor configuration values.
-
-    ACCEL_CONFIG_VALUE = 0x08:
-        accelerometer range is +/- 4g
-
-    GYRO_CONFIG_VALUE = 0x00:
-        gyroscope range is +/- 250 degrees/second
-*/
-#define ACCEL_CONFIG_VALUE 0x08
-#define GYRO_CONFIG_VALUE 0x00
-#define SAMPLE_RATE_DIV 0
-
-const float PI_VALUE = 3.14159265359f;
-
-/*
-    I2C timeout in microseconds.
-    Normal blocking I2C can freeze forever if the sensor is unplugged.
-    Timeout I2C returns false instead, so the program keeps responding.
-*/
-const uint I2C_TIMEOUT_US = 100000;
 
 /*
     Last values for the "print" command.
@@ -133,18 +53,10 @@ float lastPwmB = 0.0f;
 /*
 These functions exist somewhere later in this file. Here are their names, what they return, and what inputs they need.
 */
-float constrainValue(float value, float minVal, float maxVal);
-void setupMotorPWM(int pin);
-void driveMotors(float pwmA, float pwmB);
-void stopMotors();
+
+
 void resetPid();
 void forceStopEverything();
-
-bool mpu6050_write_register(uint8_t reg, uint8_t value);
-bool mpu6050_read_register(uint8_t reg, uint8_t *value);
-bool mpu6050_reset();
-bool mpu6050_configure();
-bool mpu6050_read_raw(int16_t accel[3], int16_t gyro[3], int16_t *temp);
 
 void clearCommandBuffer();
 void processCommand();
@@ -166,24 +78,12 @@ int main() {
 
     printf("Starting...\n");
 
-    /*
-        Set up LEDs as output pins.
-    */
-    gpio_init(LED_GREEN);
-    gpio_set_dir(LED_GREEN, GPIO_OUT);
-    gpio_init(LED_RED);
-    gpio_set_dir(LED_RED, GPIO_OUT);
+  /*
+    Set up the motor driver pins as PWM outputs.
+*/
+motorDriver.begin();
 
-    /*
-        Set up the four motor control pins as PWM outputs.
-    */
-    setupMotorPWM(MOTOR_PIN_P_1);
-    setupMotorPWM(MOTOR_PIN_P_2);
-    setupMotorPWM(MOTOR_PIN_Q_1);
-    setupMotorPWM(MOTOR_PIN_Q_2);
-    stopMotors();
-
-    printf("Successfully setup motors\n");
+printf("Successfully setup motors\n");
 
     /*
         Start the servo module.
@@ -199,18 +99,6 @@ int main() {
         printf("MPU setup succeeded. PID can be started with the 'start' command.\n");
     }
 
-    /*
-        this block prepares empty containers for sensor data, 
-        starts angle variables at zero, records the starting time, clears old command input, and prints the starting status.
-    */
-    int16_t accel[3];
-    int16_t gyro[3];
-    int16_t temp;
-
-    float roll = 0.0f;
-    float pitch = 0.0f;
-    float angle = 0.0f;
-
     absolute_time_t last_time = get_absolute_time();
 
     clearCommandBuffer();
@@ -219,18 +107,7 @@ int main() {
     printf("Type help for all commands.\n");
     printSettings();
 
-    /*
-        Main loop.
 
-        This loop runs forever.
-        Every pass:
-            1. checks serial commands
-            2. updates servo logic
-            3. reads the MPU if available
-            4. calculates angle
-            5. runs PID if enabled
-            6. saves latest values for the print command
-    */
     while (true) {
         handleSerialCommands(); // This checks if you typed a command, and if so, processes it. It also updates the hasPendingCommand variable and lastCommandTime for command timeout handling.
         servo.update(); // This updates the servo control logic, including timed moves and failsafes. Calling this every loop for check
@@ -245,136 +122,44 @@ int main() {
         float pwmA = 0.0f;
         float pwmB = 0.0f;
 
-        if (mpuOk) {
-            bool readOk = mpu6050_read_raw(accel, gyro, &temp);
+        absolute_time_t current_time = get_absolute_time();
+        float dt = absolute_time_diff_us(last_time, current_time) / 1000000.0f;
+        last_time = current_time;
 
-            if (!readOk) {
-                /*
-                    If the MPU suddenly fails, stop PID immediately.
-                    This prevents the motors from running based on bad sensor
-                    data.
-                */
-                mpuOk = false;
-                pidRunning = false;
-                resetPid();
-                stopMotors();
+        if (mpu.update(dt)) {
+            mpuOk = true;
 
-                printf("\nMPU read failed. PID stopped and motors off.\n");
-                printf("Check MPU wiring, power, or I2C noise. Commands still work.\n");
+            float angle = mpu.getAngle();
+            float gx = mpu.getGyroX();
+
+            if (pidRunning) {
+                pidOutput = pid.update(setpoint, angle, gx, dt, pValue, iValue, dValue);
+
+                MotorCommand motorCommand = motorConverter.convert(pidOutput);
+
+                motorOutput = motorCommand.motorOutput;
+                pwmA = motorCommand.pwmA;
+                pwmB = motorCommand.pwmB;
+
+                motorDriver.drive(pwmA, pwmB);
             } else {
-                /*
-                    Convert raw MPU values to physical units.
-                */
-                float ax = accel[0] / ACCEL_SCALE_FACTOR;
-                float ay = accel[1] / ACCEL_SCALE_FACTOR;
-                float az = accel[2] / ACCEL_SCALE_FACTOR;
-
-                float gx = gyro[0] / GYRO_SCALE_FACTOR;
-                float gy = gyro[1] / GYRO_SCALE_FACTOR;
-
-                /*
-                    dt is the time since the previous loop.
-                    The gyro gives degrees per second, so we multiply by dt
-                    to estimate how many degrees changed this loop.
-                */
-                absolute_time_t current_time = get_absolute_time();
-                float dt = absolute_time_diff_us(last_time, current_time) / 1000000.0f;
-                last_time = current_time;
-
-                /*
-                    Estimate roll and pitch from the accelerometer.
-                    Accelerometer angle is stable over time, but can be noisy
-                    during movement.
-                */
-                float roll_acc = atan2f(ay, az) * 180.0f / PI_VALUE;
-                float pitch_acc = atan2f(-ax, sqrtf(ay * ay + az * az)) * 180.0f / PI_VALUE;
-
-                /*
-                    Estimate roll and pitch from the gyro.
-                */
-                roll += gx * dt;
-                pitch += gy * dt;
-
-                /*
-                    Complementary filter.
-
-                    98% gyro:
-                        fast and smooth
-
-                    2% accelerometer:
-                        corrects long-term drift
-
-                    Trust the gyro almost completely, but let the accelerometer gently correct it over time
-                */
-                roll = 0.98f * roll + 0.02f * roll_acc;
-                pitch = 0.98f * pitch + 0.02f * pitch_acc;
-
-                /*
-                    This is the angle used by the PID.
-
-                    Right now it uses roll plus a calibration offset.
-                    If your physical motion is pitch instead, this can become:
-                        angle = pitch + 2.3f;
-                */
-                angle = roll + 2.3f;
-
-                if (pidRunning) {
-                    /*
-                        Run the PID.
-
-                        Inputs:
-                            setpoint = target angle
-                            angle    = measured angle
-                            dt       = loop time
-
-                        Outputs:
-                            pidOutput = total correction
-                            p/i/d     = separate parts for debugging
-                    */
-                    pidOutput = pid.update(setpoint, angle, gx, dt, pValue, iValue, dValue);
-
-                    /*
-                        Convert PID output into motor PWM. See MotorConverter class for details.
-                        This module applies:
-                            - PID output limit
-                            - motor start PWM
-                            - max PWM
-                            - deadband
-                            - response curve
-                    */
-                    MotorCommand motorCommand = motorConverter.convert(pidOutput);
-
-                    motorOutput = motorCommand.motorOutput;
-                    pwmA = motorCommand.pwmA;
-                    pwmB = motorCommand.pwmB;
-
-                    driveMotors(pwmA, pwmB);
-                } else {
-                    /*
-                        If PID is not running, always keep motors off.
-
-                        Resetting the PID prevents old integral/derivative
-                        memory from affecting the next start.
-                    */
-                    stopMotors();
-                    pid.reset();
-                }
+                motorDriver.stop();
+                pid.reset();
             }
+
+            lastRoll = mpu.getRoll();
+            lastPitch = mpu.getPitch();
+            lastAngle = mpu.getAngle();
         } else {
-            /*
-                If the MPU is not okay, PID cannot safely run.
-            */
+            mpuOk = false;
             pidRunning = false;
-            stopMotors();
-            pid.reset();
+            resetPid();
+            motorDriver.stop();
+
+            printf("\nMPU read failed. PID stopped and motors off.\n");
+            printf("Check MPU wiring, power, or I2C noise. Commands still work.\n");
         }
 
-        /*
-            Save values for the print command.
-        */
-        lastRoll = roll;
-        lastPitch = pitch;
-        lastAngle = angle;
         lastPidOutput = pidOutput;
         lastPValue = pValue;
         lastIValue = iValue;
@@ -391,70 +176,6 @@ int main() {
 
 //-------------start of functions that were declared above main() but defined after main()-----------
 
-/*
-    Keep a value inside a minimum and maximum range.
-*/
-float constrainValue(float value, float minVal, float maxVal) {
-    if (value < minVal) return minVal;
-    if (value > maxVal) return maxVal;
-    return value;
-}
-
-/*
-    Configure a motor pin as a PWM output.
-*/
-void setupMotorPWM(int pin) {
-    gpio_set_function(pin, GPIO_FUNC_PWM);
-
-    uint slice_num = pwm_gpio_to_slice_num(pin);
-    pwm_config config = pwm_get_default_config();
-
-    pwm_config_set_clkdiv(&config, 125.0f);
-    pwm_config_set_wrap(&config, MAXIMUM_LEVEL);
-
-    pwm_init(slice_num, &config, true);
-    pwm_set_gpio_level(pin, 0);
-}
-
-/*
-    Write converted PWM values to the motor pins.
-
-    pwmA means one direction.
-    pwmB means the other direction.
-*/
-void driveMotors(float pwmA, float pwmB) {
-    uint16_t pwmAValue = (uint16_t)((pwmA / 100.0f) * MAXIMUM_LEVEL);
-    uint16_t pwmBValue = (uint16_t)((pwmB / 100.0f) * MAXIMUM_LEVEL);
-
-    pwmAValue = (uint16_t)constrainValue(pwmAValue, 0, MAXIMUM_LEVEL);
-    pwmBValue = (uint16_t)constrainValue(pwmBValue, 0, MAXIMUM_LEVEL);
-
-    if (pwmA > 0.0f) {
-        pwm_set_gpio_level(MOTOR_PIN_P_1, pwmAValue);
-        pwm_set_gpio_level(MOTOR_PIN_Q_1, pwmAValue);
-
-        pwm_set_gpio_level(MOTOR_PIN_P_2, 0);
-        pwm_set_gpio_level(MOTOR_PIN_Q_2, 0);
-    } else if (pwmB > 0.0f) {
-        pwm_set_gpio_level(MOTOR_PIN_P_1, 0);
-        pwm_set_gpio_level(MOTOR_PIN_Q_1, 0);
-
-        pwm_set_gpio_level(MOTOR_PIN_P_2, pwmBValue);
-        pwm_set_gpio_level(MOTOR_PIN_Q_2, pwmBValue);
-    } else {
-        stopMotors();
-    }
-}
-
-/*
-    Turn all motor outputs off.
-*/
-void stopMotors() {
-    pwm_set_gpio_level(MOTOR_PIN_P_1, 0);
-    pwm_set_gpio_level(MOTOR_PIN_Q_1, 0);
-    pwm_set_gpio_level(MOTOR_PIN_P_2, 0);
-    pwm_set_gpio_level(MOTOR_PIN_Q_2, 0);
-}
 
 void resetPid() {
     pid.reset();
@@ -466,144 +187,12 @@ void resetPid() {
 void forceStopEverything() {
     pidRunning = false;
     resetPid();
-    stopMotors();
+    motorDriver.stop();
     servo.stop();
 
     printf("\nFORCE STOP: PID off, motors off, servos stopped\n");
 }
 
-/*
-    Write one value to one MPU6050 register using timeout I2C.
-*/
-bool mpu6050_write_register(uint8_t reg, uint8_t value) {
-    uint8_t data[] = {reg, value};
-
-    int result = i2c_write_timeout_us(
-        I2C_PORT,
-        MPU6050_ADDR,
-        data,
-        2,
-        false,
-        I2C_TIMEOUT_US
-    );
-
-    return result == 2;
-}
-
-/*
-    Read one MPU6050 register using timeout I2C.
-*/
-bool mpu6050_read_register(uint8_t reg, uint8_t *value) {
-    int writeResult = i2c_write_timeout_us(
-        I2C_PORT,
-        MPU6050_ADDR,
-        &reg,
-        1,
-        true,
-        I2C_TIMEOUT_US
-    );
-
-    if (writeResult != 1) {
-        return false;
-    }
-
-    int readResult = i2c_read_timeout_us(
-        I2C_PORT,
-        MPU6050_ADDR,
-        value,
-        1,
-        false,
-        I2C_TIMEOUT_US
-    );
-
-    return readResult == 1;
-}
-
-bool mpu6050_reset() {
-    if (!mpu6050_write_register(REG_PWR_MGMT_1, 0x80)) {
-        printf("MPU reset write failed\n");
-        return false;
-    }
-
-    sleep_ms(200);
-
-    if (!mpu6050_write_register(REG_PWR_MGMT_1, 0x00)) {
-        printf("MPU wake write failed\n");
-        return false;
-    }
-
-    sleep_ms(200);
-
-    return true;
-}
-
-bool mpu6050_configure() {
-    if (!mpu6050_write_register(REG_ACCEL_CONFIG, ACCEL_CONFIG_VALUE)) {
-        printf("MPU accel config write failed\n");
-        return false;
-    }
-
-    if (!mpu6050_write_register(REG_GYRO_CONFIG, GYRO_CONFIG_VALUE)) {
-        printf("MPU gyro config write failed\n");
-        return false;
-    }
-
-    if (!mpu6050_write_register(REG_SMPLRT_DIV, SAMPLE_RATE_DIV)) {
-        printf("MPU sample rate write failed\n");
-        return false;
-    }
-
-    return true;
-}
-
-/*
-    Read 14 bytes from the MPU:
-        6 accel bytes
-        2 temperature bytes
-        6 gyro bytes
-*/
-bool mpu6050_read_raw(int16_t accel[3], int16_t gyro[3], int16_t *temp) {
-    uint8_t buffer[14];
-    uint8_t reg = REG_ACCEL_XOUT_H;
-
-    int writeResult = i2c_write_timeout_us(
-        I2C_PORT,
-        MPU6050_ADDR,
-        &reg,
-        1,
-        true,
-        I2C_TIMEOUT_US
-    );
-
-    if (writeResult != 1) {
-        return false;
-    }
-
-    int readResult = i2c_read_timeout_us(
-        I2C_PORT,
-        MPU6050_ADDR,
-        buffer,
-        14,
-        false,
-        I2C_TIMEOUT_US
-    );
-
-    if (readResult != 14) {
-        return false;
-    }
-
-    accel[0] = (buffer[0] << 8) | buffer[1];
-    accel[1] = (buffer[2] << 8) | buffer[3];
-    accel[2] = (buffer[4] << 8) | buffer[5];
-
-    *temp = (buffer[6] << 8) | buffer[7];
-
-    gyro[0] = (buffer[8] << 8) | buffer[9];
-    gyro[1] = (buffer[10] << 8) | buffer[11];
-    gyro[2] = (buffer[12] << 8) | buffer[13];
-
-    return true;
-}
 
 /*
     Clear the typed command.
@@ -687,7 +276,7 @@ void processCommand() {
             } else if (strcmp(subCommand, "stop") == 0) { // If the subcommand is "stop", stop the PID and turn off motors immediately.
                 pidRunning = false;
                 resetPid();
-                stopMotors();
+                motorDriver.stop();
                 printf("\nPID stopped, motors off\n");
             } else if ((strcmp(subCommand, "setpoint") == 0 || strcmp(subCommand, "set") == 0) && parts == 3) { // If the subcommand is "setpoint" or "set", and a numeric value is provided, update the PID setpoint to that value.
                 setpoint = value;

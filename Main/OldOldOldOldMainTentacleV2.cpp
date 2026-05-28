@@ -4,6 +4,8 @@
 #include "PIDController.h"    // Your own PID controller class from Modules/PIDController.
 #include "ServoActuator.h"    // Your own servo control class from Modules/ServoActuator.
 #include "MotorConverter.h"   // Your own motor scaling class from Modules/MotorConverter.
+#include "MotorDriver.h"
+
 
 #include <stdio.h>            // printf() and sscanf().
 #include <stdint.h>           // Fixed-size number types like int16_t and uint8_t.
@@ -17,7 +19,7 @@ float setpoint = 0.0f; //The setpoint is the target angle for the PID controller
 PIDController pid(5.0f, 0.01f, 0.5f); // PID tuning constants: Kp, Ki, Kd.
 MotorConverter motorConverter(60.0f, 80.0f, 20.0f); // Motor conversion settings: PID output limit, max PWM, motor start PWM.
 ServoActuator servo(14, 15, 16, 17); // ServoActuator(servo1Pin, servo2Pin, servo3Pin, servo4Pin) GP14, GP15, GP16, GP17 are the servo signal pins for servos 1-4 respectively.
-
+MotorDriver motorDriver(21, 22, 27, 26);
 
 bool pidRunning = false; // Starts with PID off for safety. Type "start" to turn on PID and "stop" to turn it off.
 bool mpuOk = false; // This becomes true if the MPU6050 is successfully initialized and read. If it stays false, PID will not run, but servo commands and settings commands still work.
