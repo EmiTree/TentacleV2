@@ -3,6 +3,8 @@
 #include "pico/stdlib.h"
 #include "hardware/pwm.h"
 
+#include <stdint.h>
+
 MotorDriver::MotorDriver(int pinP1, int pinP2, int pinQ1, int pinQ2) {
     motorPinP1 = pinP1;
     motorPinP2 = pinP2;

@@ -38,7 +38,6 @@ pico_sdk_init()
 add_executable(TentacleV2
         Main/TentacleV2.cpp
         Modules/PIDController.cpp
-        Modules/ServoActuator.cpp
         Modules/MotorConverter.cpp
         Modules/MPU6050Sensor.cpp
         Modules/MotorDriver.cpp

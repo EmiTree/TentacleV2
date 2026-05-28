@@ -1,4 +1,3 @@
-// Modules/MotorDriver.h
 #pragma once
 
 class MotorDriver {
@@ -15,7 +14,7 @@ private:
     int motorPinQ1;
     int motorPinQ2;
 
-    static const int maximumLevel = 1000;
+    static constexpr int maximumLevel = 1000;
 
     void setupMotorPWM(int pin);
     float constrainValue(float value, float minVal, float maxVal);
