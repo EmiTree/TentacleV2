@@ -158,7 +158,7 @@ void MotorConverter::setMotorStartPwm(float value) {
 }
 
 void MotorConverter::setDeadband(float value) {
-    deadband = clampFloat(value, 0.0f, 0.95f);
+    deadband = clampFloat(value, 0.0f, 0.95f); 
 }
 
 void MotorConverter::setResponseCurve(float value) {

@@ -40,6 +40,7 @@ add_executable(TentacleV2
         Modules/PIDController.cpp
         Modules/ServoActuator.cpp
         Modules/MotorConverter.cpp
+        Modules/MPU6050Sensor.cpp
         )
 
 pico_set_program_name(TentacleV2 "TentacleV2")
